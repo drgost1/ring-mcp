@@ -1,0 +1,55 @@
+{
+  "name": "ring-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Claude Code that shows always-on-top notification popups with sound. Get notified when tasks complete!",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "ring-mcp": "./bin/cli.js",
+    "ring-mcp-setup": "./bin/setup.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "postinstall": "npm run build || true",
+    "setup": "node bin/setup.js"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "notification",
+    "ring",
+    "alert",
+    "popup",
+    "electron",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_USERNAME/ring-mcp.git"
+  },
+  "homepage": "https://github.com/YOUR_USERNAME/ring-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/ring-mcp/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "electron",
+    "bin",
+    "CLAUDE.md"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "electron": "^28.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
