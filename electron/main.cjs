@@ -2,6 +2,13 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
+// Disable hardware acceleration to avoid GPU process issues on Windows
+app.disableHardwareAcceleration();
+
+// Disable GPU sandbox to fix repeated launch issues
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-software-rasterizer");
+
 // Get arguments: title, message, responseFilePath
 const title = process.argv[2] || "Notification";
 const message = process.argv[3] || "Task completed!";
@@ -72,8 +79,39 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(createWindow).catch((err) => {
+  console.error("Failed to create window:", err);
+  // Write error response
+  if (responseFilePath) {
+    try {
+      fs.writeFileSync(responseFilePath, JSON.stringify({ answered: false, response: "", error: err.message }), "utf8");
+    } catch (e) {
+      // Ignore
+    }
+  }
+  app.exit(1);
+});
 
 app.on("window-all-closed", () => {
   app.quit();
+});
+
+// Ensure clean exit
+app.on("before-quit", () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.destroy();
+  }
+});
+
+// Handle any uncaught exceptions
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  if (responseFilePath) {
+    try {
+      fs.writeFileSync(responseFilePath, JSON.stringify({ answered: false, response: "", error: err.message }), "utf8");
+    } catch (e) {
+      // Ignore
+    }
+  }
+  app.exit(1);
 });
