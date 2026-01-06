@@ -32,7 +32,7 @@ ring-mcp-setup
 ### Option 3: Clone from GitHub
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ring-mcp.git
+git clone https://github.com/drgost1/ring-mcp.git
 cd ring-mcp
 npm install
 npm run setup
@@ -133,7 +133,7 @@ The ring uses Web Audio API. If no sound plays:
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/ring-mcp.git
+git clone https://github.com/drgost1/ring-mcp.git
 cd ring-mcp
 
 # Install dependencies
