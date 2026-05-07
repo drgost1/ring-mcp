@@ -6,11 +6,15 @@ Never miss when Claude finishes a task again!
 
 ## Features
 
-- **Always-on-top popup** — appears above all windows (including fullscreen apps)
-- **Bell sound** — pleasant ring tone that repeats until you respond
-- **Interactive responses** — type a reply that Claude receives
-- **Auto-dismiss timeout** — popup closes itself after a configurable timeout (default 5 min) so it never hangs forever
-- **Native notification fallback** — if Electron can't launch (no display, missing binary, etc.), the server falls back to PowerShell toast (Windows), `osascript` (macOS), or `notify-send` (Linux), and reports the failure reason back to Claude
+- **One window, many tabs** — every concurrent ring (across sessions, MCP clients, anything) becomes a tab in the same always-on-top window. No popup spam, no overlapping cascades
+- **Always-on-top** — wins over fullscreen apps via `screen-saver` window level; renders on the monitor your cursor is on
+- **Bell sound + Mute toggle** — pleasant ring loops until you respond; click `🔊 Sound` (or `Ctrl+M`) to silence the bell while keeping the popup
+- **Interactive responses** — type a free-form reply, pick from a list of options (checkboxes / radios), or both
+- **Quick-pick keyboard** — `1`-`9` toggle options, `Enter` answer, `Esc` dismiss current tab, `Tab` / `Shift+Tab` cycle tabs
+- **No timeout by default** — popups wait until you handle them manually. Opt-in `timeoutMs` if you want auto-dismiss
+- **Dismiss-all** — one click in the toolbar resolves every pending tab as dismissed
+- **Per-tab draft preservation** — switching tabs keeps your typed text + selections intact
+- **Native notification fallback** — if Electron can't launch (no display, missing binary, etc.), falls back to PowerShell toast (Windows), `osascript` (macOS), or `notify-send` (Linux) and reports the failure reason back to Claude
 - **Cross-platform** — Windows, macOS, Linux
 - **One-click setup** — automatic Claude Code configuration with atomic config writes and timestamped backups
 
@@ -58,13 +62,40 @@ You can also ask Claude to use it directly:
 "Use the ring tool to notify me when you're done"
 ```
 
-### Example tool call
+### Example tool calls
 
+**Simple notification:**
 ```javascript
 ring({
   title: "Build Complete",
-  message: "The project compiled successfully. Ready for testing?",
-  timeoutMs: 600000   // optional — auto-dismiss after 10 min
+  message: "The project compiled successfully. Ready for testing?"
+})
+```
+
+**Multi-select checklist** — let the user pick several items in one click:
+```javascript
+ring({
+  title: "Pick tasks to run now",
+  message: "Which of these should I do this session?",
+  options: [
+    "Build YoPekka",
+    "Deploy bangopower.com",
+    "Fix shinbao login bug",
+    "Review PRs",
+    "Update dependencies"
+  ]
+  // selectionMode defaults to "multiple", allowText defaults to false when options are present
+})
+```
+
+**Single-select with optional note:**
+```javascript
+ring({
+  title: "Stack choice",
+  message: "Which framework for the admin panel?",
+  options: ["Livewire", "Plain Blade", "Inertia + Vue"],
+  selectionMode: "single",
+  allowText: true   // user can also leave a note
 })
 ```
 
@@ -72,19 +103,47 @@ ring({
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `title` | string | yes | Title shown in the popup (max 200 chars) |
-| `message` | string | yes | Body shown in the popup (max 2000 chars) |
-| `timeoutMs` | number | no | Auto-dismiss timeout in ms (1000–3600000, default 300000) |
+| `title` | string | yes | Title shown in the tab (max 200 chars) |
+| `message` | string | yes | Body shown in the tab (max 5000 chars) |
+| `options` | string[] | no | If provided, the tab renders checkboxes / radios instead of plain text input. Up to 12 items, each up to 200 chars |
+| `selectionMode` | `"single"` \| `"multiple"` | no | How options behave. Default `"multiple"` (checkboxes). Ignored without `options` |
+| `allowText` | boolean | no | When `options` is set, also show the text input for a free-form note. Default: `false` with options, `true` without |
+| `timeoutMs` | number | no | Auto-dismiss timeout in ms (1000–3600000). Default `0` = wait forever — the user explicitly handles each ring |
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Submit the active tab |
+| `Esc` | Dismiss the active tab |
+| `1`-`9` | Toggle the corresponding option |
+| `Tab` / `Shift+Tab` | Cycle through open tabs |
+| `Ctrl+M` / `⌘M` | Mute / unmute the bell |
+
+### Response format
+
+Plain text reply: `User answered: <text>`
+
+Options selected: `User answered: Selected: opt1, opt3`
+
+Options + text: `User answered: Selected: opt1, opt3 | Note: <text>`
+
+Dismissed: `User dismissed the notification without answering.`
+
+Timed out: `Notification auto-dismissed after <ms>ms with no response.`
 
 ## How it works
 
-1. **Claude calls the ring tool** with a title and message
-2. **Electron popup appears** on top of all windows (including fullscreen)
-3. **Bell sound plays** until you respond or the popup auto-dismisses
-4. **You respond** by typing in the text field and clicking "Answer"
-5. **Claude receives your response** and continues accordingly
+Ring uses a **shared daemon + tabs** model so multiple concurrent rings never spam your screen:
 
-If the Electron popup cannot launch (e.g. on a headless server, missing binary, or sandbox restriction), the server automatically falls back to an OS-native notification and tells Claude that no interactive response is possible.
+1. **Claude (or any MCP client) calls the ring tool** with a title, message, and optional `options`
+2. **The MCP server writes a request file** to `<tmpdir>/ring-mcp/requests/<uuid>.json`
+3. **A single Electron daemon** (started on first request, shared across every Claude Code session) picks the file up via `fs.watch` and **opens a new tab in the same always-on-top window**
+4. **You answer or dismiss** — the daemon writes a response file to `<tmpdir>/ring-mcp/responses/<uuid>.json`
+5. **Each MCP call resolves with its own response**, in whatever order you handled them
+6. When all tabs are gone (or you click Dismiss-all / close the window), the daemon exits
+
+If the Electron daemon cannot launch (no display, missing binary, sandbox restriction), the server falls back to an OS-native notification (PowerShell toast / `osascript` / `notify-send`) and reports the failure to Claude — the user can't reply through the fallback.
 
 ## Configuration
 
@@ -126,13 +185,6 @@ Use it for: builds, tests, deployments, feature completions, or when you need in
 Don't use it for: simple Q&A, quick edits, or rapid back-and-forth chat.
 ```
 
-## Keyboard shortcuts
-
-| Key | Action |
-|-----|--------|
-| **Enter** | Submit response |
-| **Escape** | Dismiss without response |
-
 ## Troubleshooting
 
 ### Ring tool not available
@@ -165,10 +217,17 @@ cd ring-mcp
 npm install
 npm run build
 
-# Test the popup directly
-RING_TITLE="Test" RING_MESSAGE="Hello" RING_RESPONSE_PATH=/tmp/r.json RING_TIMEOUT_MS=15000 \
-  npx electron electron/main.cjs --ring-from-env
-cat /tmp/r.json
+# End-to-end test: 3 concurrent rings → one window with 3 tabs
+printf '%s\n%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1.0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ring","arguments":{"title":"Tab #1","message":"Pick one","options":["A","B","C"],"selectionMode":"single"}}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ring","arguments":{"title":"Tab #2","message":"Pick many","options":["X","Y","Z"]}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ring","arguments":{"title":"Tab #3","message":"Free text"}}}' \
+  | node dist/index.js
+
+# Direct daemon (skip MCP layer):
+npx electron electron/main.cjs --ring-from-env  # legacy single-popup mode
+npx electron electron/main.cjs --daemon         # daemon mode (drop request files into <tmp>/ring-mcp/requests/)
 ```
 
 ## Tech stack

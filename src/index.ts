@@ -9,7 +9,14 @@ import {
 import { spawn, exec } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { readFileSync, unlinkSync, existsSync } from "fs";
+import {
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+} from "fs";
 import { tmpdir, platform } from "os";
 import { randomUUID } from "crypto";
 import { promisify } from "util";
@@ -18,14 +25,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const PROJECT_DIR = join(__dirname, "..");
-const PACKAGE_VERSION = "1.1.0";
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const PACKAGE_VERSION = "1.3.0";
 const MAX_TIMEOUT_MS = 60 * 60 * 1000;
+// Default 0 = no timeout. User explicitly requested manual handling of all rings.
 const ENV_TIMEOUT = parseInt(process.env.RING_TIMEOUT_MS ?? "", 10);
-const TIMEOUT_MS =
+const DEFAULT_TIMEOUT_MS =
   Number.isFinite(ENV_TIMEOUT) && ENV_TIMEOUT >= 1000
     ? Math.min(ENV_TIMEOUT, MAX_TIMEOUT_MS)
-    : DEFAULT_TIMEOUT_MS;
+    : 0;
+
+const RING_HOME = join(tmpdir(), "ring-mcp");
+const REQUESTS_DIR = join(RING_HOME, "requests");
+const RESPONSES_DIR = join(RING_HOME, "responses");
+const DAEMON_LOCK = join(RING_HOME, "daemon.pid");
+const POLL_INTERVAL_MS = 250;
 
 const execAsync = promisify(exec);
 
@@ -34,6 +47,15 @@ interface RingResponse {
   response: string;
   error?: string;
   timedOut?: boolean;
+}
+
+interface PopupOptions {
+  title: string;
+  message: string;
+  timeoutMs: number;
+  options: string[];
+  selectionMode: "single" | "multiple";
+  allowText: boolean;
 }
 
 const server = new Server(
@@ -46,7 +68,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "ring",
       description:
-        "Ring a notification bell with an always-on-top popup. The user can type a response and click 'Answer', or click 'Dismiss' to close without responding. Returns the user's response if they answered. If the popup cannot be shown, the server falls back to an OS-native notification (no response possible) and reports the failure reason.",
+        "Ring a notification bell that opens a tab in a single always-on-top popup window. Multiple concurrent rings appear as tabs in the same window — the user switches between them and answers each independently. Each tab supports a free-form text reply, multi/single-select options (1-9 keys to toggle, Enter to submit, Esc to dismiss), or both. There is no auto-dismiss by default; the popup waits for the user. The user can also Mute the bell or Dismiss All from the toolbar. If the popup cannot be shown, the server falls back to an OS-native notification and reports the failure.",
       inputSchema: {
         type: "object",
         properties: {
@@ -57,14 +79,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           message: {
             type: "string",
-            description: "Notification body (max 2000 chars)",
-            maxLength: 2000,
+            description: "Notification body (max 5000 chars)",
+            maxLength: 5000,
+          },
+          options: {
+            type: "array",
+            description:
+              "Optional list of choices. When provided, the tab renders checkboxes (or radios in 'single' selectionMode) instead of just a text field. Up to 12 items, each up to 200 chars.",
+            items: { type: "string", maxLength: 200 },
+            maxItems: 12,
+          },
+          selectionMode: {
+            type: "string",
+            enum: ["single", "multiple"],
+            description:
+              "How options behave: 'single' = radio buttons, 'multiple' = checkboxes. Default 'multiple'. Ignored when no options are provided.",
+          },
+          allowText: {
+            type: "boolean",
+            description:
+              "When options are provided, also show the free-form text input alongside them. Default: false when options are provided, true when no options.",
           },
           timeoutMs: {
             type: "number",
             description:
-              "Optional auto-dismiss timeout in milliseconds (1000–3600000, default 300000)",
-            minimum: 1000,
+              "Optional auto-dismiss timeout in milliseconds (1000–3600000). Default 0 = wait forever (the user explicitly handles each ring manually).",
+            minimum: 0,
             maximum: MAX_TIMEOUT_MS,
           },
         },
@@ -75,7 +115,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 async function locateElectron(): Promise<string | null> {
-  // Preferred: the `electron` package exports its binary path when imported from plain Node.
   try {
     const mod: unknown = await import("electron");
     const candidate =
@@ -85,7 +124,7 @@ async function locateElectron(): Promise<string | null> {
       return candidate;
     }
   } catch {
-    // fall through to disk fallbacks
+    /* fall through */
   }
 
   const isWin = platform() === "win32";
@@ -133,11 +172,72 @@ async function nativeNotify(title: string, message: string): Promise<boolean> {
   }
 }
 
-async function showPopup(
-  title: string,
-  message: string,
-  timeoutMs: number
-): Promise<RingResponse> {
+function ensureRingDirs(): void {
+  for (const d of [RING_HOME, REQUESTS_DIR, RESPONSES_DIR]) {
+    try {
+      mkdirSync(d, { recursive: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readDaemonPid(): number {
+  try {
+    return parseInt(readFileSync(DAEMON_LOCK, "utf8").trim(), 10);
+  } catch {
+    return 0;
+  }
+}
+
+function ensureDaemonRunning(electronPath: string, mainPath: string): boolean {
+  ensureRingDirs();
+
+  // Fast path: existing alive daemon.
+  if (existsSync(DAEMON_LOCK) && isPidAlive(readDaemonPid())) {
+    return true;
+  }
+
+  // Stale lock: try to remove. If somebody just claimed it between our
+  // check and remove, that's fine — they'll be the daemon.
+  try {
+    unlinkSync(DAEMON_LOCK);
+  } catch {
+    /* ignore */
+  }
+
+  // Spawn detached daemon. We write the lock with the spawned child's PID.
+  let child;
+  try {
+    child = spawn(electronPath, [mainPath, "--daemon"], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  } catch {
+    return false;
+  }
+
+  try {
+    writeFileSync(DAEMON_LOCK, String(child.pid), "utf8");
+  } catch {
+    /* if we couldn't write the lock, daemon will rewrite it on boot */
+  }
+  child.unref();
+  return true;
+}
+
+async function showPopup(opts: PopupOptions): Promise<RingResponse> {
   const electronPath = await locateElectron();
   if (!electronPath) {
     return {
@@ -156,90 +256,111 @@ async function showPopup(
     };
   }
 
-  const responseFilePath = join(tmpdir(), `ring-mcp-${randomUUID()}.json`);
+  ensureRingDirs();
 
+  const id = randomUUID();
+  const requestPath = join(REQUESTS_DIR, `${id}.json`);
+  const responsePath = join(RESPONSES_DIR, `${id}.json`);
+
+  // Atomic write so the daemon never reads a half-written request.
+  const requestBody = JSON.stringify({
+    id,
+    title: opts.title,
+    message: opts.message,
+    options: opts.options,
+    selectionMode: opts.selectionMode,
+    allowText: opts.allowText,
+    createdAt: Date.now(),
+  });
+  try {
+    const tmp = `${requestPath}.tmp`;
+    writeFileSync(tmp, requestBody, "utf8");
+    renameSync(tmp, requestPath);
+  } catch (err) {
+    return {
+      answered: false,
+      response: "",
+      error: `Failed to write request file: ${(err as Error).message}`,
+    };
+  }
+
+  const daemonOk = ensureDaemonRunning(electronPath, mainPath);
+  if (!daemonOk) {
+    try {
+      unlinkSync(requestPath);
+    } catch {
+      /* ignore */
+    }
+    return {
+      answered: false,
+      response: "",
+      error: "Failed to start the ring daemon",
+    };
+  }
+
+  return await waitForResponse(responsePath, opts.timeoutMs);
+}
+
+function waitForResponse(responsePath: string, timeoutMs: number): Promise<RingResponse> {
   return new Promise<RingResponse>((resolve) => {
     let settled = false;
+    let pollHandle: NodeJS.Timeout | null = null;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    let watchdogHandle: NodeJS.Timeout | null = null;
+
     const finish = (value: RingResponse): void => {
       if (settled) return;
       settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (watchdogHandle) clearInterval(watchdogHandle);
       try {
-        if (existsSync(responseFilePath)) unlinkSync(responseFilePath);
+        if (existsSync(responsePath)) unlinkSync(responsePath);
       } catch {
-        /* ignore cleanup errors */
+        /* ignore */
       }
       resolve(value);
     };
 
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(electronPath, [mainPath, "--ring-from-env"], {
-        stdio: "ignore",
-        cwd: PROJECT_DIR,
-        env: {
-          ...process.env,
-          RING_TITLE: title,
-          RING_MESSAGE: message,
-          RING_RESPONSE_PATH: responseFilePath,
-          RING_TIMEOUT_MS: String(timeoutMs),
-        },
-        windowsHide: true,
-      });
-    } catch (err) {
-      finish({
-        answered: false,
-        response: "",
-        error: `Failed to spawn Electron: ${(err as Error).message}`,
-      });
-      return;
+    const tryRead = (): boolean => {
+      try {
+        if (!existsSync(responsePath)) return false;
+        const raw = readFileSync(responsePath, "utf8");
+        const parsed = JSON.parse(raw);
+        finish({
+          answered: Boolean(parsed.answered),
+          response: typeof parsed.response === "string" ? parsed.response : "",
+          error: typeof parsed.error === "string" ? parsed.error : undefined,
+          timedOut: Boolean(parsed.timedOut),
+        });
+        return true;
+      } catch {
+        // mid-write — retry on next poll
+        return false;
+      }
+    };
+
+    pollHandle = setInterval(tryRead, POLL_INTERVAL_MS);
+    tryRead();
+
+    if (timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        finish({ answered: false, response: "", timedOut: true });
+      }, timeoutMs);
     }
 
-    // Hard kill if the popup process outlives its own timeout (grace = +5s).
-    const killTimer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        /* ignore */
-      }
-      finish({ answered: false, response: "", timedOut: true });
-    }, timeoutMs + 5000);
-
-    child.on("error", (err) => {
-      clearTimeout(killTimer);
-      finish({
-        answered: false,
-        response: "",
-        error: `Electron spawn error: ${err.message}`,
-      });
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(killTimer);
-      try {
-        if (existsSync(responseFilePath)) {
-          const raw = readFileSync(responseFilePath, "utf8");
-          const parsed = JSON.parse(raw);
-          finish({
-            answered: Boolean(parsed.answered),
-            response: typeof parsed.response === "string" ? parsed.response : "",
-            error: typeof parsed.error === "string" ? parsed.error : undefined,
-            timedOut: Boolean(parsed.timedOut),
-          });
-        } else {
-          finish({
-            answered: false,
-            response: "",
-            error: `Electron exited (code ${code ?? "unknown"}) without writing a response`,
-          });
-        }
-      } catch (err) {
+    // Watchdog: if the daemon dies while we wait, surface an error instead of
+    // blocking forever.
+    watchdogHandle = setInterval(() => {
+      const pid = readDaemonPid();
+      if (pid > 0 && !isPidAlive(pid)) {
         finish({
           answered: false,
           response: "",
-          error: `Could not read response: ${(err as Error).message}`,
+          error: "Ring daemon exited while waiting for the user's response",
         });
       }
-    });
+    }, 1500);
   });
 }
 
@@ -252,6 +373,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     title?: unknown;
     message?: unknown;
     timeoutMs?: unknown;
+    options?: unknown;
+    selectionMode?: unknown;
+    allowText?: unknown;
   };
 
   const title =
@@ -259,13 +383,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ? args.title.slice(0, 200)
       : "Notification";
   const message =
-    typeof args.message === "string" ? args.message.slice(0, 2000) : "";
+    typeof args.message === "string" ? args.message.slice(0, 5000) : "";
   const timeoutMs =
     typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs) && args.timeoutMs >= 1000
       ? Math.min(args.timeoutMs, MAX_TIMEOUT_MS)
-      : TIMEOUT_MS;
+      : DEFAULT_TIMEOUT_MS;
 
-  // Hard kill switch — useful for headless / autonomous runs.
+  const options = Array.isArray(args.options)
+    ? args.options
+        .filter((o): o is string => typeof o === "string" && o.trim().length > 0)
+        .slice(0, 12)
+        .map((s) => s.slice(0, 200))
+    : [];
+  const selectionMode: "single" | "multiple" =
+    args.selectionMode === "single" ? "single" : "multiple";
+  const allowText =
+    typeof args.allowText === "boolean"
+      ? args.allowText
+      : options.length === 0;
+
   if (process.env.RING_DISABLED === "1") {
     console.error(`[ring-mcp] disabled via RING_DISABLED — silently acknowledging "${title}"`);
     return {
@@ -280,7 +416,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   let result: RingResponse;
   try {
-    result = await showPopup(title, message, timeoutMs);
+    result = await showPopup({
+      title,
+      message,
+      timeoutMs,
+      options,
+      selectionMode,
+      allowText,
+    });
   } catch (err) {
     result = {
       answered: false,

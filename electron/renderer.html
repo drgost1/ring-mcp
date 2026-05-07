@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ring Notification</title>
+  <title>Ring</title>
   <style>
     * {
       margin: 0;
@@ -11,68 +11,285 @@
       box-sizing: border-box;
     }
 
+    html, body {
+      height: 100%;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
       color: #ffffff;
-      height: 100vh;
       display: flex;
       flex-direction: column;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    /* ── Toolbar (drag region + actions) ───────────────────────── */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.25);
+      border-bottom: 1px solid #2a2a4a;
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+    }
+
+    .toolbar-brand {
+      font-size: 12px;
+      font-weight: 600;
+      color: #e94560;
+      letter-spacing: 0.04em;
+      flex: 1;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      gap: 6px;
+      -webkit-app-region: no-drag;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #c0c0c0;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+
+    .icon-btn:hover {
+      background: #1f1f3a;
+      border-color: #2a2a4a;
+      color: #ffffff;
+    }
+
+    .icon-btn.active {
+      background: rgba(233, 69, 96, 0.15);
+      border-color: #e94560;
+      color: #ffb0bd;
+    }
+
+    /* ── Tab bar ───────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      padding: 6px 8px 0;
+      background: rgba(0, 0, 0, 0.15);
+      overflow-x: auto;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+
+    .tabs::-webkit-scrollbar {
+      height: 4px;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      max-width: 160px;
+      background: #14142e;
+      border: 1px solid #2a2a4a;
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      font-size: 12px;
+      color: #a0a0a0;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .tab:hover {
+      background: #1a1a3a;
+      color: #ffffff;
+    }
+
+    .tab.active {
+      background: #1a1a2e;
+      color: #ffffff;
+      border-color: #e94560;
+    }
+
+    .tab.unread::after {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #e94560;
+      box-shadow: 0 0 6px #e94560;
+      flex-shrink: 0;
+    }
+
+    .tab-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .tab-close {
+      background: transparent;
+      border: none;
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+      border-radius: 3px;
+    }
+
+    .tab-close:hover {
+      background: #2a2a4a;
+      color: #ffffff;
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
       align-items: center;
       justify-content: center;
+      color: #6b7280;
+      font-size: 13px;
       padding: 20px;
-      user-select: none;
-      -webkit-app-region: drag;
+      text-align: center;
+    }
+
+    /* ── Active tab body ───────────────────────────────────────── */
+    .body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 16px 20px 18px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .body.hidden {
+      display: none;
+    }
+
+    .bell-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
     }
 
     .bell-icon {
-      font-size: 40px;
-      margin-bottom: 12px;
+      font-size: 28px;
       animation: ring 0.5s ease-in-out infinite;
     }
 
+    .bell-icon.silent {
+      animation: none;
+      opacity: 0.6;
+    }
+
     @keyframes ring {
-      0% { transform: rotate(0deg); }
+      0%, 70%, 100% { transform: rotate(0deg); }
       10% { transform: rotate(15deg); }
       20% { transform: rotate(-15deg); }
       30% { transform: rotate(10deg); }
       40% { transform: rotate(-10deg); }
       50% { transform: rotate(5deg); }
       60% { transform: rotate(-5deg); }
-      70% { transform: rotate(0deg); }
-      100% { transform: rotate(0deg); }
     }
 
     .title {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 600;
-      margin-bottom: 6px;
-      text-align: center;
       color: #e94560;
+      flex: 1;
+      line-height: 1.3;
     }
 
     .message {
       font-size: 13px;
-      color: #a0a0a0;
-      text-align: center;
-      margin-bottom: 8px;
-      line-height: 1.4;
-      max-width: 320px;
-    }
-
-    .countdown {
-      font-size: 11px;
-      color: #6b7280;
-      letter-spacing: 0.04em;
+      color: #c8c8c8;
+      line-height: 1.5;
       margin-bottom: 12px;
-      min-height: 14px;
+      max-height: 180px;
+      overflow-y: auto;
+      padding-right: 4px;
+      user-select: text;
+      white-space: pre-wrap;
+      word-wrap: break-word;
     }
 
     .answer-section {
-      width: 100%;
-      max-width: 320px;
-      margin-bottom: 16px;
-      -webkit-app-region: no-drag;
+      margin-bottom: 12px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .options {
+      display: none;
+      max-height: 240px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+      padding-right: 4px;
+    }
+
+    .options.show {
+      display: block;
+    }
+
+    .option-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      margin-bottom: 6px;
+      background: #0f0f23;
+      border: 1px solid #2a2a4a;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .option-item:hover {
+      border-color: #4a4a7a;
+      background: #14142e;
+    }
+
+    .option-item input {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+      accent-color: #4CAF50;
+      flex-shrink: 0;
+    }
+
+    .option-item.checked {
+      border-color: #4CAF50;
+      background: rgba(76, 175, 80, 0.12);
+    }
+
+    .option-key {
+      font-size: 10px;
+      color: #6b7280;
+      background: #1f1f3a;
+      border: 1px solid #2a2a4a;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: 'Cascadia Code', Consolas, monospace;
+      flex-shrink: 0;
+    }
+
+    .option-label {
+      font-size: 13px;
+      color: #ffffff;
+      flex: 1;
+      line-height: 1.35;
     }
 
     .answer-input {
@@ -87,6 +304,10 @@
       transition: border-color 0.2s;
     }
 
+    .answer-input.hidden {
+      display: none;
+    }
+
     .answer-input:focus {
       border-color: #e94560;
     }
@@ -97,85 +318,99 @@
 
     .buttons {
       display: flex;
-      gap: 12px;
-      -webkit-app-region: no-drag;
+      gap: 10px;
+      flex-shrink: 0;
     }
 
     .btn {
-      padding: 10px 24px;
-      font-size: 14px;
+      padding: 9px 18px;
+      font-size: 13px;
       font-weight: 600;
-      border-radius: 8px;
+      border-radius: 7px;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: all 0.18s ease;
       border: none;
     }
 
     .btn-answer {
       background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
       color: white;
-      box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+      flex: 1;
     }
 
     .btn-answer:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(76, 175, 80, 0.35);
     }
 
     .btn-dismiss {
       background: linear-gradient(135deg, #e94560 0%, #c73e54 100%);
       color: white;
-      box-shadow: 0 4px 15px rgba(233, 69, 96, 0.3);
     }
 
     .btn-dismiss:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(233, 69, 96, 0.4);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(233, 69, 96, 0.35);
     }
 
     .btn:active {
       transform: translateY(0);
     }
 
-    .pulse-ring {
-      position: absolute;
-      top: 40%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 80px;
-      height: 80px;
-      border: 3px solid rgba(233, 69, 96, 0.3);
-      border-radius: 50%;
-      animation: pulse 1.5s ease-out infinite;
-      pointer-events: none;
+    /* ── Scrollbars ────────────────────────────────────────────── */
+    .message::-webkit-scrollbar,
+    .options::-webkit-scrollbar {
+      width: 6px;
+    }
+    .message::-webkit-scrollbar-track,
+    .options::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .message::-webkit-scrollbar-thumb,
+    .options::-webkit-scrollbar-thumb {
+      background: #2a2a4a;
+      border-radius: 3px;
+    }
+    .message::-webkit-scrollbar-thumb:hover,
+    .options::-webkit-scrollbar-thumb:hover {
+      background: #3a3a5a;
     }
 
-    @keyframes pulse {
-      0% {
-        transform: translate(-50%, -50%) scale(0.5);
-        opacity: 1;
-      }
-      100% {
-        transform: translate(-50%, -50%) scale(2);
-        opacity: 0;
-      }
+    .tabs::-webkit-scrollbar-thumb {
+      background: #2a2a4a;
+      border-radius: 2px;
     }
   </style>
 </head>
 <body>
-  <div class="pulse-ring"></div>
-  <div class="bell-icon">🔔</div>
-  <div class="title" id="title">Notification</div>
-  <div class="message" id="message">Task completed!</div>
-  <div class="countdown" id="countdown"></div>
-
-  <div class="answer-section">
-    <input type="text" class="answer-input" id="answerInput" placeholder="Type your response..." autofocus>
+  <div class="toolbar">
+    <div class="toolbar-brand">🔔 Ring <span id="tabCount" style="color:#6b7280;font-weight:400;"></span></div>
+    <div class="toolbar-actions">
+      <button class="icon-btn" id="muteBtn" title="Mute / unmute the bell">🔊 Sound</button>
+      <button class="icon-btn" id="dismissAllBtn" title="Dismiss every open tab">Dismiss all</button>
+    </div>
   </div>
 
-  <div class="buttons">
-    <button class="btn btn-answer" id="answerBtn">Answer</button>
-    <button class="btn btn-dismiss" id="dismissBtn">Dismiss</button>
+  <div class="tabs" id="tabs"></div>
+
+  <div class="empty-state" id="emptyState">No active notifications.</div>
+
+  <div class="body hidden" id="body">
+    <div class="bell-row">
+      <div class="bell-icon" id="bellIcon">🔔</div>
+      <div class="title" id="title">Notification</div>
+    </div>
+    <div class="message" id="message"></div>
+
+    <div class="answer-section">
+      <div class="options" id="options"></div>
+      <input type="text" class="answer-input" id="answerInput" placeholder="Type your response...">
+    </div>
+
+    <div class="buttons">
+      <button class="btn btn-answer" id="answerBtn">Answer</button>
+      <button class="btn btn-dismiss" id="dismissBtn">Dismiss</button>
+    </div>
   </div>
 
   <script src="renderer.cjs"></script>
