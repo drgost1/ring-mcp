@@ -1,28 +1,28 @@
 # Ring MCP
 
-An MCP (Model Context Protocol) server for Claude Code that shows **always-on-top notification popups** with sound when tasks complete.
+An MCP (Model Context Protocol) server for Claude Code that shows **always-on-top notification popups** with sound when tasks complete — with a graceful OS-native notification fallback if the popup can't open.
 
 Never miss when Claude finishes a task again!
 
-![Ring Notification](https://via.placeholder.com/400x250/1a1a2e/e94560?text=Ring+Notification)
-
 ## Features
 
-- **Always-on-top popup** - Notification appears above all windows
-- **Bell sound** - Pleasant ring tone that repeats until dismissed
-- **Interactive responses** - Type a response that Claude receives
-- **Cross-platform** - Works on Windows, macOS, and Linux
-- **One-click setup** - Automatic Claude Code configuration
+- **Always-on-top popup** — appears above all windows (including fullscreen apps)
+- **Bell sound** — pleasant ring tone that repeats until you respond
+- **Interactive responses** — type a reply that Claude receives
+- **Auto-dismiss timeout** — popup closes itself after a configurable timeout (default 5 min) so it never hangs forever
+- **Native notification fallback** — if Electron can't launch (no display, missing binary, etc.), the server falls back to PowerShell toast (Windows), `osascript` (macOS), or `notify-send` (Linux), and reports the failure reason back to Claude
+- **Cross-platform** — Windows, macOS, Linux
+- **One-click setup** — automatic Claude Code configuration with atomic config writes and timestamped backups
 
 ## Quick Install
 
-### Option 1: npx (Recommended)
+### Option 1: npx (recommended)
 
 ```bash
 npx ring-mcp-setup
 ```
 
-### Option 2: Global Install
+### Option 2: Global install
 
 ```bash
 npm install -g ring-mcp
@@ -42,7 +42,7 @@ After installation, **restart Claude Code** to activate the ring tool.
 
 ## Usage
 
-Once installed, Claude Code will automatically have access to the `ring` tool. Claude will use it intelligently to notify you when:
+Once installed, Claude Code automatically has access to the `ring` tool. Claude will use it intelligently to notify you when:
 
 - A build or compilation finishes
 - Tests complete (pass or fail)
@@ -50,7 +50,7 @@ Once installed, Claude Code will automatically have access to the `ring` tool. C
 - An error needs your attention
 - User input is required to continue
 
-### Manual Usage
+### Manual usage
 
 You can also ask Claude to use it directly:
 
@@ -58,26 +58,37 @@ You can also ask Claude to use it directly:
 "Use the ring tool to notify me when you're done"
 ```
 
-### Example Tool Call
+### Example tool call
 
 ```javascript
 ring({
   title: "Build Complete",
-  message: "The project compiled successfully. Ready for testing?"
+  message: "The project compiled successfully. Ready for testing?",
+  timeoutMs: 600000   // optional — auto-dismiss after 10 min
 })
 ```
 
-## How It Works
+### Tool parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | yes | Title shown in the popup (max 200 chars) |
+| `message` | string | yes | Body shown in the popup (max 2000 chars) |
+| `timeoutMs` | number | no | Auto-dismiss timeout in ms (1000–3600000, default 300000) |
+
+## How it works
 
 1. **Claude calls the ring tool** with a title and message
-2. **Electron popup appears** on top of all windows
-3. **Bell sound plays** repeatedly to get your attention
+2. **Electron popup appears** on top of all windows (including fullscreen)
+3. **Bell sound plays** until you respond or the popup auto-dismisses
 4. **You respond** by typing in the text field and clicking "Answer"
 5. **Claude receives your response** and continues accordingly
 
+If the Electron popup cannot launch (e.g. on a headless server, missing binary, or sandbox restriction), the server automatically falls back to an OS-native notification and tells Claude that no interactive response is possible.
+
 ## Configuration
 
-The setup script automatically adds the ring server to your `~/.claude.json`:
+The setup script atomically updates `~/.claude.json`:
 
 ```json
 {
@@ -85,15 +96,27 @@ The setup script automatically adds the ring server to your `~/.claude.json`:
     "ring": {
       "type": "stdio",
       "command": "node",
-      "args": ["/path/to/ring-mcp/dist/index.js"]
+      "args": ["/path/to/ring-mcp/dist/index.js"],
+      "env": {}
     }
   }
 }
 ```
 
-### Making Claude Use It Automatically
+If your existing `~/.claude.json` is already present, setup creates a timestamped backup (`.bak-<timestamp>`) before writing. If the existing file is malformed JSON, setup quarantines it as `.broken-<timestamp>.bak` and writes a fresh config instead of failing.
 
-Add to your project's `CLAUDE.md` or `~/.claude/CLAUDE.md`:
+### Environment variables
+
+You can tweak runtime behaviour without re-running setup by adding env vars to the `env` object in `~/.claude.json`:
+
+| Variable | Effect |
+|----------|--------|
+| `RING_TIMEOUT_MS` | Default auto-dismiss timeout in ms (overrides the 5-minute default) |
+| `RING_DISABLED=1` | Skip the popup entirely. The tool returns a stub response and logs to stderr — useful for headless `/loop` runs |
+
+### Making Claude use it automatically
+
+Add this to your project's `CLAUDE.md` or `~/.claude/CLAUDE.md`:
 
 ```markdown
 ## Notification Behavior
@@ -103,7 +126,7 @@ Use it for: builds, tests, deployments, feature completions, or when you need in
 Don't use it for: simple Q&A, quick edits, or rapid back-and-forth chat.
 ```
 
-## Keyboard Shortcuts
+## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
@@ -120,38 +143,40 @@ Don't use it for: simple Q&A, quick edits, or rapid back-and-forth chat.
 
 ### Notification not appearing
 
-1. Check if Electron is installed: `npx electron --version`
-2. Rebuild the package: `cd /path/to/ring-mcp && npm run build`
+1. Check Electron is installed: `npx electron --version`
+2. Rebuild: `cd /path/to/ring-mcp && npm run build`
+3. Check Claude's stderr — the server logs the exact failure reason and whether the native notification fallback fired
+
+### Electron crashes on launch (Windows)
+
+The server already disables hardware acceleration and the GPU sandbox. If it still crashes, try `RING_DISABLED=1` to confirm the rest of the chain works, then look at the Electron stderr for the underlying GPU/sandbox error.
 
 ### Sound not playing
 
-The ring uses Web Audio API. If no sound plays:
-- Check your system volume
-- Some systems may block audio from Electron apps
+The ring uses the Web Audio API. If no sound plays:
+- Check system volume
+- Some systems block audio from headless / sandboxed Electron apps — the popup remains visible regardless
 
 ## Development
 
 ```bash
-# Clone the repo
 git clone https://github.com/drgost1/ring-mcp.git
 cd ring-mcp
-
-# Install dependencies
 npm install
-
-# Build
 npm run build
 
-# Test the notification manually
-npx electron electron/main.cjs "Test" "Hello World"
+# Test the popup directly
+RING_TITLE="Test" RING_MESSAGE="Hello" RING_RESPONSE_PATH=/tmp/r.json RING_TIMEOUT_MS=15000 \
+  npx electron electron/main.cjs --ring-from-env
+cat /tmp/r.json
 ```
 
-## Tech Stack
+## Tech stack
 
-- **TypeScript** - MCP server
-- **Electron** - Desktop notification UI
-- **Web Audio API** - Sound generation
-- **Model Context Protocol SDK** - Claude Code integration
+- **TypeScript** — MCP server
+- **Electron** — desktop notification UI
+- **Web Audio API** — sound generation
+- **Model Context Protocol SDK** — Claude Code integration
 
 ## License
 

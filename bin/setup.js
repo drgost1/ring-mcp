@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
+import { readFileSync, writeFileSync, existsSync, renameSync, copyFileSync } from "fs";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
-import { dirname } from "path";
+import { spawnSync } from "child_process";
+import { createInterface } from "readline";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Colors for terminal output
 const colors = {
   reset: "\x1b[0m",
   bright: "\x1b[1m",
@@ -25,16 +25,84 @@ function log(message, color = colors.reset) {
 }
 
 function getClaudeConfigPath() {
-  const home = homedir();
-  return join(home, ".claude.json");
+  return join(homedir(), ".claude.json");
 }
 
 function getPackageRoot() {
-  // Go up from bin/ to package root
   return join(__dirname, "..");
 }
 
-function setup() {
+function timestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function ask(question) {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
+
+function buildIfNeeded(packageRoot, serverPath) {
+  if (existsSync(serverPath)) return true;
+  log("\n⚠️  Server not built yet. Building...", colors.yellow);
+  // Spawn tsc directly via Node so we don't hit the Windows .cmd EINVAL issue
+  // on Node 20+ (CVE-2024-27980) and don't need shell: true.
+  const tscEntry = join(packageRoot, "node_modules", "typescript", "bin", "tsc");
+  if (!existsSync(tscEntry)) {
+    log(
+      "\n❌ TypeScript not installed. Run `npm install` inside ring-mcp first.",
+      colors.red
+    );
+    return false;
+  }
+  const result = spawnSync(process.execPath, [tscEntry], {
+    cwd: packageRoot,
+    stdio: "inherit",
+  });
+  if (result.status !== 0 || !existsSync(serverPath)) {
+    log("\n❌ Build failed. Run `npm install && npm run build` inside ring-mcp manually.", colors.red);
+    return false;
+  }
+  return true;
+}
+
+function readExistingConfig(configPath) {
+  if (!existsSync(configPath)) {
+    return { config: {}, isNew: true };
+  }
+  try {
+    const raw = readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return { config: parsed && typeof parsed === "object" ? parsed : {}, isNew: false };
+  } catch (err) {
+    const backup = `${configPath}.broken-${timestamp()}.bak`;
+    log(
+      `\n⚠️  Existing config is not valid JSON. Backed up to ${backup} and starting fresh.`,
+      colors.yellow
+    );
+    try {
+      copyFileSync(configPath, backup);
+    } catch (copyErr) {
+      log(`   (Backup also failed: ${copyErr.message})`, colors.red);
+    }
+    return { config: {}, isNew: true, recoveredFromCorruption: true };
+  }
+}
+
+function writeConfigAtomic(configPath, config) {
+  const serialized = JSON.stringify(config, null, 2);
+  // Roundtrip check before touching the real file.
+  JSON.parse(serialized);
+  const tmp = `${configPath}.tmp-${process.pid}`;
+  writeFileSync(tmp, serialized, "utf8");
+  renameSync(tmp, configPath);
+}
+
+async function setup() {
   log("\n🔔 Ring MCP Setup", colors.bright + colors.cyan);
   log("═".repeat(40), colors.cyan);
 
@@ -45,79 +113,61 @@ function setup() {
   log(`\n📁 Package location: ${packageRoot}`, colors.blue);
   log(`📁 Config location: ${configPath}`, colors.blue);
 
-  // Check if server file exists
-  if (!existsSync(serverPath)) {
-    log("\n⚠️  Server not built yet. Building...", colors.yellow);
-    const { execSync } = await import("child_process");
-    try {
-      execSync("npm run build", { cwd: packageRoot, stdio: "inherit" });
-    } catch (err) {
-      log("\n❌ Build failed. Please run 'npm run build' manually.", colors.red);
-      process.exit(1);
-    }
+  if (!buildIfNeeded(packageRoot, serverPath)) {
+    process.exit(1);
   }
 
-  // Read existing config or create new one
-  let config = {};
-  if (existsSync(configPath)) {
-    try {
-      const content = readFileSync(configPath, "utf8");
-      config = JSON.parse(content);
-      log("\n✓ Found existing Claude config", colors.green);
-    } catch (err) {
-      log("\n⚠️  Could not parse existing config, creating backup...", colors.yellow);
-      writeFileSync(`${configPath}.backup`, readFileSync(configPath));
-    }
-  } else {
+  const { config, isNew } = readExistingConfig(configPath);
+  if (isNew) {
     log("\n📝 Creating new Claude config...", colors.yellow);
+  } else {
+    log("\n✓ Found existing Claude config", colors.green);
   }
 
-  // Ensure mcpServers object exists
-  if (!config.mcpServers) {
+  if (!config.mcpServers || typeof config.mcpServers !== "object") {
     config.mcpServers = {};
   }
 
-  // Check if ring is already configured
   if (config.mcpServers.ring) {
     log("\n⚠️  Ring MCP is already configured!", colors.yellow);
-    log("   Current path: " + (config.mcpServers.ring.args?.[0] || "unknown"));
-
-    const readline = await import("readline");
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    const answer = await new Promise((resolve) => {
-      rl.question("\n   Overwrite existing configuration? (y/N): ", resolve);
-    });
-    rl.close();
-
-    if (answer.toLowerCase() !== "y") {
+    const currentArgs = config.mcpServers.ring.args;
+    if (Array.isArray(currentArgs) && currentArgs[0]) {
+      log(`   Current path: ${currentArgs[0]}`);
+    }
+    const answer = await ask("\n   Overwrite existing configuration? (y/N): ");
+    if (answer.trim().toLowerCase() !== "y") {
       log("\n   Keeping existing configuration.", colors.blue);
       log("\n✅ Setup complete! Restart Claude Code to use Ring MCP.\n", colors.green);
       return;
     }
   }
 
-  // Add ring MCP server configuration
+  // Backup the existing config before overwriting (if present and parseable).
+  if (!isNew && existsSync(configPath)) {
+    const backup = `${configPath}.bak-${timestamp()}`;
+    try {
+      copyFileSync(configPath, backup);
+      log(`\n💾 Backed up existing config to ${backup}`, colors.blue);
+    } catch (err) {
+      log(`\n⚠️  Could not back up config: ${err.message}`, colors.yellow);
+    }
+  }
+
   config.mcpServers.ring = {
     type: "stdio",
     command: "node",
-    args: [serverPath.replace(/\\/g, "/")], // Use forward slashes for cross-platform
+    args: [serverPath.replace(/\\/g, "/")],
     env: {},
   };
 
-  // Write updated config
   try {
-    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    writeConfigAtomic(configPath, config);
     log("\n✅ Ring MCP configured successfully!", colors.green);
   } catch (err) {
     log(`\n❌ Failed to write config: ${err.message}`, colors.red);
     process.exit(1);
   }
 
-  // Print success message
   log("\n" + "═".repeat(40), colors.cyan);
   log("\n🎉 Setup Complete!", colors.bright + colors.green);
   log("\nNext steps:", colors.bright);
@@ -125,10 +175,12 @@ function setup() {
   log("  2. The 'ring' tool will be available automatically", colors.reset);
   log("\nUsage in Claude Code:", colors.bright);
   log('  ring({ title: "Done!", message: "Task completed" })', colors.cyan);
-  log("\nThe notification will pop up and you can respond!\n", colors.reset);
+  log("\nOptional env vars:", colors.bright);
+  log("  RING_TIMEOUT_MS  — default auto-dismiss timeout (default 300000)", colors.reset);
+  log("  RING_DISABLED=1  — silence the ring (logs to stderr instead of opening a popup)", colors.reset);
+  log("");
 }
 
-// Run setup
 setup().catch((err) => {
   log(`\n❌ Setup failed: ${err.message}`, colors.red);
   process.exit(1);

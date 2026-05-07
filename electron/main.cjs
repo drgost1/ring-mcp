@@ -1,30 +1,65 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
-// Disable hardware acceleration to avoid GPU process issues on Windows
 app.disableHardwareAcceleration();
-
-// Disable GPU sandbox to fix repeated launch issues
 app.commandLine.appendSwitch("disable-gpu");
 app.commandLine.appendSwitch("disable-software-rasterizer");
 
-// Get arguments: title, message, responseFilePath
-const title = process.argv[2] || "Notification";
-const message = process.argv[3] || "Task completed!";
-const responseFilePath = process.argv[4] || null;
+const useEnv = process.argv.includes("--ring-from-env");
+const title = useEnv
+  ? process.env.RING_TITLE || "Notification"
+  : process.argv[2] || "Notification";
+const message = useEnv
+  ? process.env.RING_MESSAGE || "Task completed!"
+  : process.argv[3] || "Task completed!";
+const responseFilePath = useEnv
+  ? process.env.RING_RESPONSE_PATH || null
+  : process.argv[4] || null;
+const rawTimeout = useEnv ? process.env.RING_TIMEOUT_MS : process.argv[5];
+const timeoutMs = (() => {
+  const parsed = parseInt(rawTimeout || "300000", 10);
+  return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 300000;
+})();
 
-let mainWindow;
+let mainWindow = null;
+let responseWritten = false;
+let autoTimer = null;
+let quitting = false;
+
+function writeResponseOnce(data) {
+  if (responseWritten || !responseFilePath) return;
+  responseWritten = true;
+  try {
+    const tmp = `${responseFilePath}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data), "utf8");
+    fs.renameSync(tmp, responseFilePath);
+  } catch (err) {
+    // Last-ditch direct write — if rename fails (e.g. cross-device), try plain write.
+    try {
+      fs.writeFileSync(responseFilePath, JSON.stringify(data), "utf8");
+    } catch (err2) {
+      console.error("Failed to write response:", err2);
+    }
+  }
+}
+
+function quit(data) {
+  if (quitting) return;
+  quitting = true;
+  writeResponseOnce(data);
+  if (autoTimer) {
+    clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+  app.quit();
+}
 
 function createWindow() {
-  // Get primary display dimensions
-  const { screen } = require("electron");
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
-
-  // Window dimensions (slightly taller for input)
   const windowWidth = 400;
-  const windowHeight = 300;
+  const windowHeight = 320;
 
   mainWindow = new BrowserWindow({
     width: windowWidth,
@@ -43,75 +78,81 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "renderer.html"));
+  // Strongest always-on-top level so the popup beats fullscreen apps too.
+  try {
+    mainWindow.setAlwaysOnTop(true, "screen-saver");
+  } catch {
+    /* ignore on platforms that reject the level */
+  }
 
-  // Send title and message to renderer once loaded
-  mainWindow.webContents.on("did-finish-load", () => {
-    mainWindow.webContents.send("notification-data", { title, message });
+  mainWindow.loadFile(path.join(__dirname, "renderer.html")).catch((err) => {
+    console.error("Failed to load renderer:", err);
+    quit({ answered: false, response: "", error: `loadFile failed: ${err.message}` });
   });
 
-  // Focus the window
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("notification-data", { title, message, timeoutMs });
+    }
+  });
+
+  mainWindow.on("closed", () => {
+    // OS chrome / window-control close path — ensure we still emit a dismiss response.
+    quit({ answered: false, response: "" });
+  });
+
   mainWindow.focus();
 
-  // Handle user response from renderer
-  ipcMain.on("user-response", (event, data) => {
-    // Write response to file if path provided
-    if (responseFilePath) {
-      try {
-        fs.writeFileSync(responseFilePath, JSON.stringify(data), "utf8");
-      } catch (err) {
-        console.error("Failed to write response:", err);
-      }
-    }
-    app.quit();
+  ipcMain.on("user-response", (_event, data) => {
+    quit({
+      answered: Boolean(data && data.answered),
+      response: data && typeof data.response === "string" ? data.response : "",
+    });
   });
 
-  // Legacy close handler (keep for backwards compatibility)
   ipcMain.on("close-window", () => {
-    if (responseFilePath) {
-      try {
-        fs.writeFileSync(responseFilePath, JSON.stringify({ answered: false, response: "" }), "utf8");
-      } catch (err) {
-        console.error("Failed to write response:", err);
-      }
-    }
-    app.quit();
+    quit({ answered: false, response: "" });
   });
+
+  if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+    autoTimer = setTimeout(() => {
+      quit({ answered: false, response: "", timedOut: true });
+    }, timeoutMs);
+  }
 }
 
-app.whenReady().then(createWindow).catch((err) => {
-  console.error("Failed to create window:", err);
-  // Write error response
-  if (responseFilePath) {
-    try {
-      fs.writeFileSync(responseFilePath, JSON.stringify({ answered: false, response: "", error: err.message }), "utf8");
-    } catch (e) {
-      // Ignore
-    }
-  }
-  app.exit(1);
-});
+app
+  .whenReady()
+  .then(createWindow)
+  .catch((err) => {
+    console.error("Failed to create window:", err);
+    quit({ answered: false, response: "", error: `whenReady failed: ${err.message}` });
+    app.exit(1);
+  });
 
 app.on("window-all-closed", () => {
+  writeResponseOnce({ answered: false, response: "" });
   app.quit();
 });
 
-// Ensure clean exit
 app.on("before-quit", () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.destroy();
   }
 });
 
-// Handle any uncaught exceptions
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
-  if (responseFilePath) {
-    try {
-      fs.writeFileSync(responseFilePath, JSON.stringify({ answered: false, response: "", error: err.message }), "utf8");
-    } catch (e) {
-      // Ignore
-    }
-  }
+  writeResponseOnce({ answered: false, response: "", error: err.message });
   app.exit(1);
 });
+
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error("Unhandled rejection:", msg);
+  writeResponseOnce({ answered: false, response: "", error: msg });
+  app.exit(1);
+});
+
+process.on("SIGTERM", () => quit({ answered: false, response: "", error: "SIGTERM" }));
+process.on("SIGINT", () => quit({ answered: false, response: "", error: "SIGINT" }));

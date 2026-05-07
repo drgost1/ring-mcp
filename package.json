@@ -1,7 +1,7 @@
 {
   "name": "ring-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for Claude Code that shows always-on-top notification popups with sound. Get notified when tasks complete!",
+  "version": "1.1.0",
+  "description": "MCP server for Claude Code that shows always-on-top notification popups with sound, plus an OS-native notification fallback. Get notified when tasks complete!",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "postinstall": "npm run build || true",
+    "postinstall": "node bin/postinstall.js",
     "setup": "node bin/setup.js"
   },
   "keywords": [
