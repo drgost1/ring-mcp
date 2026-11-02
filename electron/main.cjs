@@ -32,6 +32,16 @@ function isPidAlive(pid) {
   }
 }
 
+function setWindowPinned(win, pinned) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.setAlwaysOnTop(pinned, "screen-saver");
+  } catch {
+    /* ignore */
+  }
+  if (pinned) win.moveTop();
+}
+
 if (process.argv.includes("--daemon")) {
   bootDaemon();
 } else {
@@ -72,6 +82,7 @@ function bootDaemon() {
   let pollHandle = null;
   let watcher = null;
   let muted = false;
+  let pinned = true; // Every new window starts pinned, so a ring is never missed.
   let shuttingDown = false;
 
   function pickDisplay() {
@@ -155,18 +166,28 @@ function bootDaemon() {
     }
   }
 
+  function flashTaskbar() {
+    if (process.platform !== "win32") return;
+    try {
+      mainWindow.flashFrame(true);
+    } catch {
+      /* ignore */
+    }
+  }
+
   function bringToFront() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    // Unpinned means "stay out of my way": a new ring keeps its sound and
+    // flashes the taskbar, but never takes focus from what the user is doing.
+    if (!pinned) {
+      if (!mainWindow.isVisible()) mainWindow.showInactive();
+      flashTaskbar();
+      return;
+    }
     mainWindow.show();
     mainWindow.moveTop();
     mainWindow.focus();
-    if (process.platform === "win32") {
-      try {
-        mainWindow.flashFrame(true);
-      } catch {
-        /* ignore */
-      }
-    }
+    flashTaskbar();
     if (typeof app.focus === "function") {
       try {
         app.focus({ steal: true });
@@ -239,6 +260,14 @@ function bootDaemon() {
       }
     });
 
+    mainWindow.on("focus", () => {
+      try {
+        mainWindow.flashFrame(false);
+      } catch {
+        /* ignore */
+      }
+    });
+
     mainWindow.on("closed", () => {
       mainWindow = null;
       // User closed the window manually. Treat all open tabs as dismissed
@@ -283,6 +312,11 @@ function bootDaemon() {
 
   ipcMain.on("set-muted", (_event, value) => {
     muted = Boolean(value);
+  });
+
+  ipcMain.on("set-pinned", (_event, value) => {
+    pinned = Boolean(value);
+    setWindowPinned(mainWindow, pinned);
   });
 
   function startWatching() {
@@ -496,6 +530,10 @@ function bootSinglePopup() {
 
   ipcMain.on("dismiss-all", () => {
     quit({ answered: false, response: "" });
+  });
+
+  ipcMain.on("set-pinned", (_e, value) => {
+    setWindowPinned(mainWindow, Boolean(value));
   });
 
   app

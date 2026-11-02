@@ -1,4 +1,4 @@
-# Ring MCP
+# Tufan Ring MCP
 
 An MCP (Model Context Protocol) server for Claude Code that shows **always-on-top notification popups** with sound when tasks complete — with a graceful OS-native notification fallback if the popup can't open.
 
@@ -9,6 +9,7 @@ Never miss when Claude finishes a task again!
 - **One window, many tabs** — every concurrent ring (across sessions, MCP clients, anything) becomes a tab in the same always-on-top window. No popup spam, no overlapping cascades
 - **Always-on-top** — wins over fullscreen apps via `screen-saver` window level; renders on the monitor your cursor is on
 - **Bell sound + Mute toggle** — pleasant ring loops until you respond; click `🔊 Sound` (or `Ctrl+M`) to silence the bell while keeping the popup
+- **Pin / unpin** — the window starts pinned on top of everything; click `📌 Pinned` to let other windows cover it. While unpinned, a new ring still plays its sound and flashes the taskbar but does not take focus. Each new window starts pinned again.
 - **Interactive responses** — type a free-form reply, pick from a list of options (checkboxes / radios), or both
 - **Quick-pick keyboard** — `1`-`9` toggle options, `Enter` answer, `Esc` dismiss current tab, `Tab` / `Shift+Tab` cycle tabs
 - **No timeout by default** — popups wait until you handle them manually. Opt-in `timeoutMs` if you want auto-dismiss

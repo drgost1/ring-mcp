@@ -103,7 +103,7 @@ function writeConfigAtomic(configPath, config) {
 }
 
 async function setup() {
-  log("\n🔔 Ring MCP Setup", colors.bright + colors.cyan);
+  log("\n🔔 Tufan Ring MCP Setup", colors.bright + colors.cyan);
   log("═".repeat(40), colors.cyan);
 
   const configPath = getClaudeConfigPath();
@@ -129,7 +129,7 @@ async function setup() {
   }
 
   if (config.mcpServers.ring) {
-    log("\n⚠️  Ring MCP is already configured!", colors.yellow);
+    log("\n⚠️  Tufan Ring MCP is already configured!", colors.yellow);
     const currentArgs = config.mcpServers.ring.args;
     if (Array.isArray(currentArgs) && currentArgs[0]) {
       log(`   Current path: ${currentArgs[0]}`);
@@ -137,7 +137,7 @@ async function setup() {
     const answer = await ask("\n   Overwrite existing configuration? (y/N): ");
     if (answer.trim().toLowerCase() !== "y") {
       log("\n   Keeping existing configuration.", colors.blue);
-      log("\n✅ Setup complete! Restart Claude Code to use Ring MCP.\n", colors.green);
+      log("\n✅ Setup complete! Restart Claude Code to use Tufan Ring MCP.\n", colors.green);
       return;
     }
   }
@@ -162,7 +162,7 @@ async function setup() {
 
   try {
     writeConfigAtomic(configPath, config);
-    log("\n✅ Ring MCP configured successfully!", colors.green);
+    log("\n✅ Tufan Ring MCP configured successfully!", colors.green);
   } catch (err) {
     log(`\n❌ Failed to write config: ${err.message}`, colors.red);
     process.exit(1);

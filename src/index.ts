@@ -25,7 +25,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const PROJECT_DIR = join(__dirname, "..");
-const PACKAGE_VERSION = "1.3.0";
+const PACKAGE_VERSION = "1.4.0";
 const MAX_TIMEOUT_MS = 60 * 60 * 1000;
 // Default 0 = no timeout. User explicitly requested manual handling of all rings.
 const ENV_TIMEOUT = parseInt(process.env.RING_TIMEOUT_MS ?? "", 10);
@@ -59,7 +59,7 @@ interface PopupOptions {
 }
 
 const server = new Server(
-  { name: "ring-mcp", version: PACKAGE_VERSION },
+  { name: "tufan-ring-mcp", version: PACKAGE_VERSION },
   { capabilities: { tools: {} } }
 );
 
@@ -68,7 +68,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "ring",
       description:
-        "Ring a notification bell that opens a tab in a single always-on-top popup window. Multiple concurrent rings appear as tabs in the same window — the user switches between them and answers each independently. Each tab supports a free-form text reply, multi/single-select options (1-9 keys to toggle, Enter to submit, Esc to dismiss), or both. There is no auto-dismiss by default; the popup waits for the user. The user can also Mute the bell or Dismiss All from the toolbar. If the popup cannot be shown, the server falls back to an OS-native notification and reports the failure.",
+        "Ring a notification bell that opens a tab in a single always-on-top popup window. Multiple concurrent rings appear as tabs in the same window — the user switches between them and answers each independently. Each tab supports a free-form text reply, multi/single-select options (1-9 keys to toggle, Enter to submit, Esc to dismiss), or both. There is no auto-dismiss by default; the popup waits for the user. The user can also Unpin the window so it stops staying on top, Mute the bell, or Dismiss All from the toolbar. If the popup cannot be shown, the server falls back to an OS-native notification and reports the failure.",
       inputSchema: {
         type: "object",
         properties: {
@@ -471,7 +471,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`Ring MCP server v${PACKAGE_VERSION} running on stdio`);
+  console.error(`Tufan Ring MCP server v${PACKAGE_VERSION} running on stdio`);
 }
 
 main().catch((error) => {

@@ -11,6 +11,7 @@ const answerInput = document.getElementById("answerInput");
 const answerBtn = document.getElementById("answerBtn");
 const dismissBtn = document.getElementById("dismissBtn");
 const muteBtn = document.getElementById("muteBtn");
+const pinBtn = document.getElementById("pinBtn");
 const dismissAllBtn = document.getElementById("dismissAllBtn");
 const bellIcon = document.getElementById("bellIcon");
 
@@ -19,6 +20,7 @@ const bellIcon = document.getElementById("bellIcon");
 const tabs = new Map(); // id → { title, message, options, selectionMode, allowText, draftText, draftSelections (Set<number>), unread }
 let activeId = null;
 let muted = false;
+let pinned = true;
 
 let audioContext = null;
 let audioFailed = false;
@@ -100,6 +102,16 @@ function setMuted(value) {
     startRinging();
   }
   ipcRenderer.send("set-muted", muted);
+}
+
+function setPinned(value) {
+  pinned = Boolean(value);
+  pinBtn.textContent = pinned ? "📌 Pinned" : "📌 Pin to top";
+  pinBtn.title = pinned
+    ? "Pinned on top of every window. Click to unpin."
+    : "Not pinned: other windows can cover this one. Click to pin on top.";
+  pinBtn.classList.toggle("active", pinned);
+  ipcRenderer.send("set-pinned", pinned);
 }
 
 function updateTabCount() {
@@ -327,6 +339,10 @@ answerInput.addEventListener("keydown", (e) => {
 
 muteBtn.addEventListener("click", () => {
   setMuted(!muted);
+});
+
+pinBtn.addEventListener("click", () => {
+  setPinned(!pinned);
 });
 
 dismissAllBtn.addEventListener("click", () => {
